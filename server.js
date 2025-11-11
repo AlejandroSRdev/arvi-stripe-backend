@@ -5,55 +5,34 @@ import cors from 'cors';
 import bodyParser from 'body-parser';
 
 const app = express();
+
+// --- CONFIGURACIÓN STRIPE ---
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2024-06-20',
 });
 
 // --- CONFIGURACIÓN GENERAL ---
 app.use(cors());
-app.use(express.json());
 
-// --- MAPEO DE PLANES Y PRECIOS (actualice IDs si cambian) ---
+// --- MAPEO DE PLANES Y PRECIOS (IDs reales en Stripe) ---
 const PRICE_MAP = {
-  mini: 'prod_TOyt0CCW0Iidf2',  // Precio plan MINI
-  base: 'prod_TOyv8VBWSSGwxU',  // Precio plan BASE
-  pro:  'prod_TOywft0qSxr4g1',  // Precio plan PRO
+  mini: 'price_1SSF5CFnbJHY3wka6TBnfrTt',  // ARVI Mini
+  base: 'price_1SSF5tFnbJHY3wkatvx4vmUB',  // ARVI Base
+  pro:  'price_1SSF6oFnbJHY3wka81bfgqDc',  // ARVI Pro
 };
 
-// --- CREAR SESIÓN DE CHECKOUT ---
-app.post('/create-checkout-session', async (req, res) => {
-  try {
-    const { plan, userId } = req.body;
-    const priceId = PRICE_MAP[plan];
-
-    if (!priceId) {
-      return res.status(400).json({ error: '❌ Plan inválido o inexistente' });
-    }
-
-    // ✅ Crear sesión de pago con redirección a /success?plan=X&success=true
-    const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${process.env.SUCCESS_BASE_URL}?plan=${plan}&success=true`,
-      cancel_url: process.env.CANCEL_URL,
-      metadata: { userId, plan },
-    });
-
-    console.log(`🧾 Sesión Stripe creada → Plan: ${plan}, Usuario: ${userId}`);
-    res.json({ url: session.url });
-  } catch (e) {
-    console.error('❌ Error creando sesión Stripe:', e.message);
-    res.status(500).json({ error: 'No se pudo crear la sesión de pago' });
-  }
-});
-
 // --- WEBHOOK DE CONFIRMACIÓN STRIPE ---
+// ⚠️ Debe ir ANTES del express.json() para que conserve el raw body
 app.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
 
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
   } catch (err) {
     console.error('⚠️ Firma inválida del webhook:', err.message);
     return res.sendStatus(400);
@@ -65,10 +44,50 @@ app.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req, r
 
     console.log(`✅ Pago confirmado → Usuario: ${userId}, Plan: ${plan}`);
 
-    // 👉 En el futuro: puede emitir un token, guardar en Firestore o enviar email
+    // 🔜 Futuro: guardar en Firestore, emitir token o enviar email
   }
 
   res.sendStatus(200);
+});
+
+// --- APLICAR JSON DESPUÉS DEL WEBHOOK ---
+app.use(express.json());
+
+// --- VALIDACIÓN PREVIA DE URLS ---
+if (!process.env.SUCCESS_BASE_URL?.startsWith('https')) {
+  console.warn(
+    '⚠️ Advertencia: SUCCESS_BASE_URL no es HTTPS. Stripe podría rechazar la sesión.'
+  );
+}
+
+// --- CREAR SESIÓN DE CHECKOUT ---
+app.post('/create-checkout-session', async (req, res) => {
+  try {
+    const { plan, userId } = req.body;
+    console.log(`📦 Solicitud de sesión → plan: ${plan}, usuario: ${userId}`);
+
+    const priceId = PRICE_MAP[plan?.toLowerCase()];
+    if (!priceId) {
+      console.warn('⚠️ Plan inválido recibido:', plan);
+      return res.status(400).json({ error: '❌ Plan inválido o inexistente' });
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${process.env.SUCCESS_BASE_URL}?plan=${plan}&success=true`,
+      cancel_url: process.env.CANCEL_URL,
+      metadata: { userId, plan },
+    });
+
+    console.log(`🧾 Sesión Stripe creada correctamente → ${session.id}`);
+    res.json({ url: session.url });
+  } catch (e) {
+    console.error('❌ Error creando sesión Stripe:', e);
+    res.status(500).json({
+      error: e.message || 'Error interno al crear la sesión de pago',
+    });
+  }
 });
 
 // --- INICIO DEL SERVIDOR ---
