@@ -3,6 +3,8 @@ import express from 'express';
 import Stripe from 'stripe';
 import cors from 'cors';
 import bodyParser from 'body-parser';
+import fs from 'fs';                     
+import path from 'path';
 
 const app = express();
 
@@ -13,6 +15,33 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 
 // --- CONFIGURACIÓN GENERAL ---
 app.use(cors());
+
+// 📂 Archivo local donde guardaremos los planes pagados
+const DATA_FILE = path.join(process.cwd(), 'pagos.json');
+
+// Utilidad para leer pagos guardados
+function leerPagos() {
+  if (!fs.existsSync(DATA_FILE)) {
+    return {};
+  }
+  try {
+    const raw = fs.readFileSync(DATA_FILE, 'utf8');
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    console.error('⚠️ Error leyendo pagos.json:', e);
+    return {};
+  }
+}
+
+// Utilidad para guardar pagos
+function guardarPagos(pagos) {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(pagos, null, 2), 'utf8');
+    console.log('💾 pagos.json actualizado.');
+  } catch (e) {
+    console.error('⚠️ Error escribiendo pagos.json:', e);
+  }
+}
 
 // --- MAPEO DE PLANES Y PRECIOS (IDs reales en Stripe) ---
 const PRICE_MAP = {
@@ -38,13 +67,26 @@ app.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req, r
     return res.sendStatus(400);
   }
 
+  // Solo nos interesa cuando el pago se ha completado correctamente
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-    const { userId, plan } = session.metadata;
+    const { userId, plan } = session.metadata || {};
 
     console.log(`✅ Pago confirmado → Usuario: ${userId}, Plan: ${plan}`);
 
-    // 🔜 Futuro: guardar en Firestore, emitir token o enviar email
+    if (userId && plan) {
+      const pagos = leerPagos();
+
+      pagos[userId] = {
+        plan,
+        activo: true,
+        fecha: new Date().toISOString(),
+      };
+
+      guardarPagos(pagos);
+    } else {
+      console.warn('⚠️ Webhook sin metadata userId/plan. No se guarda nada.');
+    }
   }
 
   res.sendStatus(200);
@@ -90,8 +132,26 @@ app.post('/create-checkout-session', async (req, res) => {
   }
 });
 
+// --- ENDPOINT PARA CONSULTAR ESTADO DEL USUARIO ---
+app.get('/estado-usuario', (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'Falta userId en la query' });
+  }
+
+  const pagos = leerPagos();
+
+  if (!pagos[userId]) {
+    return res.json({ activo: false });
+  }
+
+  return res.json(pagos[userId]);
+});
+
 // --- INICIO DEL SERVIDOR ---
 const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor Stripe activo en puerto ${PORT}`);
+  console.log(`📂 Archivo de pagos: ${DATA_FILE}`);
 });
