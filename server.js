@@ -45,9 +45,9 @@ function guardarPagos(pagos) {
 
 // --- MAPEO DE PLANES Y PRECIOS (IDs reales en Stripe) ---
 const PRICE_MAP = {
-  mini: 'price_1SSF5CFnbJHY3wka6TBnfrTt',  // ARVI Mini
-  base: 'price_1SSF5tFnbJHY3wkatvx4vmUB',  // ARVI Base
-  pro:  'price_1SSF6oFnbJHY3wka81bfgqDc',  // ARVI Pro
+  mini: 'price_1STfPrFnbJHY3wkay1GkONWR',  // ARVI Mini
+  base: 'price_1STfOXFnbJHY3wkaOOVtijmK',  // ARVI Base
+  pro:  'price_1STfNAFnbJHY3wkaPcARhnPa',  // ARVI Pro
 };
 
 // --- WEBHOOK DE CONFIRMACIÓN STRIPE ---
@@ -155,3 +155,4 @@ app.listen(PORT, () => {
   console.log(`🚀 Servidor Stripe activo en puerto ${PORT}`);
   console.log(`📂 Archivo de pagos: ${DATA_FILE}`);
 });
+
