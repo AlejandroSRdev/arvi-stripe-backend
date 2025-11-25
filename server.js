@@ -92,36 +92,66 @@ app.post(
     }
 
     /* ----------------------------------------------------
-       🟦 checkout.session.completed → ACTIVAR PLAN
-    ---------------------------------------------------- */
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object;
-      const { userId, plan } = session.metadata || {};
-      const customerId = session.customer;
+   🟦 checkout.session.completed → ACTIVAR PLAN
+---------------------------------------------------- */
+if (event.type === 'checkout.session.completed') {
+  const session = event.data.object;
 
-      console.log(`\n🎉 Pago completado`);
-      console.log(`→ Usuario: ${userId}`);
-      console.log(`→ Plan: ${plan}`);
+  // 🔍 Log completo para depurar
+  console.log('\n🧾 [WEBHOOK] checkout.session.completed recibido:');
+  console.log('   id sesión:', session.id);
+  console.log('   metadata:', session.metadata);
+  console.log('   customer:', session.customer);
+  console.log('   subscription:', session.subscription);
 
-      try {
-        await stripe.subscriptions.update(session.subscription, {
-          metadata: { userId, plan }
-        });
-      } catch (e) {
-        console.error("❌ Error añadiendo metadata a la suscripción:", e);
-      }
+  const { userId, plan } = session.metadata || {};
 
-      if (userId && plan) {
-        const pagos = leerPagos();
-        pagos[userId] = {
-          plan,
-          activo: true,
-          customerId,
-          fecha: new Date().toISOString(),
-        };
-        guardarPagos(pagos);
-      }
+  // 🟢 Intentar obtener customerId de forma robusta
+  let customerId = session.customer || null;
+
+  if (!customerId && typeof session.subscription === 'string') {
+    try {
+      const sub = await stripe.subscriptions.retrieve(session.subscription);
+      customerId = sub.customer;
+      console.log('   ✅ customerId obtenido desde subscription:', customerId);
+    } catch (e) {
+      console.error('   ❌ Error recuperando subscription para customerId:', e.message);
     }
+  }
+
+  console.log(`\n🎉 Pago completado (modo: ${STRIPE_MODE})`);
+  console.log(`   → userId: ${userId}`);
+  console.log(`   → plan: ${plan}`);
+  console.log(`   → customerId final: ${customerId}`);
+
+  // Añadir metadata a la suscripción real (para futuros eventos)
+  if (session.subscription && (userId || plan)) {
+    try {
+      await stripe.subscriptions.update(session.subscription, {
+        metadata: { userId, plan },
+      });
+      console.log('   📝 Metadata añadida a la suscripción.');
+    } catch (e) {
+      console.error('   ❌ Error añadiendo metadata a la suscripción:', e.message);
+    }
+  }
+
+  if (userId && plan) {
+    const pagos = leerPagos();
+
+    pagos[userId] = {
+      plan,
+      activo: true,
+      customerId: customerId || null,
+      fecha: new Date().toISOString(),
+    };
+
+    guardarPagos(pagos);
+    console.log('   💾 pago registrado en pagos.json');
+  } else {
+    console.warn('⚠️ Webhook sin metadata válida userId/plan.');
+  }
+}
 
     /* ----------------------------------------------------
        🟡 customer.subscription.deleted → CANCELADA
@@ -232,4 +262,5 @@ const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor Stripe (${STRIPE_MODE}) en puerto ${PORT}`);
 });
+
 
