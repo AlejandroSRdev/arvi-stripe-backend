@@ -38,12 +38,6 @@ services:
       - key: PRICE_PRO_TEST
         sync: false
 
-      # Éxito y cancelación
-      - key: SUCCESS_BASE_URL
-        value: "https://getarvi.com/success"
-      - key: CANCEL_URL
-        value: "https://getarvi.com/cancel"
-
       # Firebase (seguras)
       - key: FIREBASE_PROJECT_ID
         sync: false
@@ -51,5 +45,6 @@ services:
         sync: false
       - key: FIREBASE_PRIVATE_KEY
         sync: false
+
 
 
