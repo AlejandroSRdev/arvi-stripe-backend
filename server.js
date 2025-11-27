@@ -3,14 +3,46 @@ import express from 'express';
 import Stripe from 'stripe';
 import cors from 'cors';
 import bodyParser from 'body-parser';
-import fs from 'fs';
-import path from 'path';
 
-const app = express();
+/* ----------------------------------------------------
+   🟦 FIREBASE ADMIN
+---------------------------------------------------- */
+import admin from 'firebase-admin';
+import serviceAccount from './firebase-service-account.json' assert { type: "json" };
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+const db = admin.firestore();
+const pagosRef = db.collection("pagos");
+
+/* ----------------------------------------------------
+   🟦 FUNCIONES FIRESTORE (Reemplazan pagos.json)
+---------------------------------------------------- */
+async function leerPago(userId) {
+  try {
+    const doc = await pagosRef.doc(userId).get();
+    return doc.exists ? doc.data() : null;
+  } catch (e) {
+    console.error("❌ Error leyendo Firestore:", e);
+    return null;
+  }
+}
+
+async function guardarPago(userId, data) {
+  try {
+    await pagosRef.doc(userId).set(data, { merge: true });
+    console.log("💾 Firestore actualizado:", data);
+  } catch (e) {
+    console.error("❌ Error escribiendo en Firestore:", e);
+  }
+}
 
 /* ----------------------------------------------------
    🟦 SISTEMA DE MODOS
 ---------------------------------------------------- */
+const app = express();
 const STRIPE_MODE = process.env.STRIPE_MODE || "test";
 
 console.log(`\n========================================`);
@@ -33,30 +65,6 @@ if (!STRIPE_WEBHOOK_SECRET) { console.error("❌ Falta STRIPE_WEBHOOK_SECRET"); 
 const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
 app.use(cors());
-const DATA_FILE = path.join(process.cwd(), 'pagos.json');
-
-/* ----------------------------------------------------
-   🟦 UTILIDADES
----------------------------------------------------- */
-
-function leerPagos() {
-  if (!fs.existsSync(DATA_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch (e) {
-    console.error("⚠️ Error leyendo pagos.json:", e);
-    return {};
-  }
-}
-
-function guardarPagos(pagos) {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(pagos, null, 2), 'utf8');
-    console.log("💾 pagos.json actualizado.");
-  } catch (e) {
-    console.error("⚠️ Error escribiendo pagos.json:", e);
-  }
-}
 
 /* ----------------------------------------------------
    🟦 PRICE MAP
@@ -92,12 +100,10 @@ app.post(
     }
 
     /* ----------------------------------------------------
-       🟦 checkout.session.completed → ACTIVAR PLAN - MEJORADO
+       🟦 checkout.session.completed → ACTIVAR PLAN
     ---------------------------------------------------- */
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
-
-      // 🔍 Log completo para depurar
       console.log('\n🧾 [WEBHOOK] checkout.session.completed recibido:');
       console.log('   id sesión:', session.id);
       console.log('   metadata:', session.metadata);
@@ -105,8 +111,6 @@ app.post(
       console.log('   subscription:', session.subscription);
 
       const { userId, plan } = session.metadata || {};
-
-      // 🟢 Obtener customerId de forma robusta
       let customerId = session.customer || null;
 
       if (!customerId && session.subscription) {
@@ -124,7 +128,6 @@ app.post(
       console.log(`   → plan: ${plan}`);
       console.log(`   → customerId final: ${customerId}`);
 
-      // 🆕 Añadir metadata a la suscripción real (CRÍTICO para futuros eventos)
       if (session.subscription && (userId || plan)) {
         try {
           await stripe.subscriptions.update(session.subscription, {
@@ -136,27 +139,19 @@ app.post(
         }
       }
 
-      // 🎯 GUARDAR EN PAGOS.JSON - ESTRUCTURA EXACTA REQUERIDA
       if (userId && plan) {
-        const pagos = leerPagos();
-
-        pagos[userId] = {
+        await guardarPago(userId, {
           plan: plan,
           activo: true,
           customerId: customerId || null,
           fecha: new Date().toISOString(),
-        };
-
-        guardarPagos(pagos);
-        console.log('   💾 Pago registrado en pagos.json');
-        console.log('   📋 Estructura guardada:', pagos[userId]);
-      } else {
-        console.warn('⚠️ Webhook sin metadata válida userId/plan.');
+        });
+        console.log('   💾 Pago registrado en Firestore');
       }
     }
 
     /* ----------------------------------------------------
-       🟡 customer.subscription.deleted → CANCELADA - MEJORADO
+       🟡 customer.subscription.deleted → CANCELADA
     ---------------------------------------------------- */
     if (event.type === 'customer.subscription.deleted') {
       const subscription = event.data.object;
@@ -168,30 +163,23 @@ app.post(
       console.log(`   → Customer: ${customerId}`);
 
       if (userId) {
-        const pagos = leerPagos();
-        
-        // 🆕 ESTRUCTURA EXACTA para cancelación
-        pagos[userId] = {
-          plan: 'freemium',
+        await guardarPago(userId, {
+          plan: "freemium",
           activo: false,
-          customerId: null, // 🔥 ELIMINAR customerId en cancelación
+          customerId: null,
           fecha: new Date().toISOString(),
-        };
-        
-        guardarPagos(pagos);
-        console.log('   💾 Usuario revertido a freemium en pagos.json');
+        });
+        console.log('   💾 Usuario revertido a freemium en Firestore');
       }
     }
 
     /* ----------------------------------------------------
-       🔴 invoice.payment_failed → FALLÓ RENOVACIÓN - MEJORADO
+       🔴 invoice.payment_failed → RENOVACIÓN FALLIDA
     ---------------------------------------------------- */
     if (event.type === 'invoice.payment_failed') {
       const invoice = event.data.object;
-      
-      // 🆕 Obtener userId desde metadata de la suscripción
       let userId = invoice.metadata?.userId;
-      
+
       if (!userId && invoice.subscription) {
         try {
           const sub = await stripe.subscriptions.retrieve(invoice.subscription);
@@ -206,18 +194,13 @@ app.post(
       console.log(`   → Factura: ${invoice.id}`);
 
       if (userId) {
-        const pagos = leerPagos();
-        
-        // 🆕 ESTRUCTURA EXACTA para fallo de pago
-        pagos[userId] = {
-          plan: 'freemium',
+        await guardarPago(userId, {
+          plan: "freemium",
           activo: false,
-          customerId: null, // 🔥 ELIMINAR customerId en fallo de pago
+          customerId: null,
           fecha: new Date().toISOString(),
-        };
-        
-        guardarPagos(pagos);
-        console.log('   💾 Usuario revertido a freemium por fallo de pago');
+        });
+        console.log('   💾 Usuario revertido a freemium en Firestore');
       }
     }
 
@@ -231,7 +214,7 @@ app.post(
 app.use(express.json());
 
 /* ----------------------------------------------------
-   🟦 CREAR SESIÓN CHECKOUT - MEJORADO
+   🟦 CREAR SESIÓN CHECKOUT
 ---------------------------------------------------- */
 app.post('/create-checkout-session', async (req, res) => {
   try {
@@ -247,27 +230,18 @@ app.post('/create-checkout-session', async (req, res) => {
       return res.status(400).json({ error: "Plan inválido" });
     }
 
-    // 🆕 ASEGURAR que metadata se incluye SIEMPRE
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${process.env.SUCCESS_BASE_URL}?plan=${plan}&success=true`,
       cancel_url: process.env.CANCEL_URL,
-      metadata: { 
-        userId: userId,
-        plan: plan 
-      }, // 🔥 CRÍTICO: metadata siempre presente
+      metadata: { userId, plan },
       subscription_data: {
-        metadata: {
-          userId: userId,
-          plan: plan
-        }
-      }, // 🆕 También en subscription_data para mayor seguridad
+        metadata: { userId, plan }
+      }
     });
 
     console.log(`✅ [CHECKOUT] Sesión creada: ${session.id}`);
-    console.log(`📋 [CHECKOUT] Metadata incluida: userId=${userId}, plan=${plan}`);
-
     res.json({ url: session.url });
 
   } catch (e) {
@@ -277,7 +251,7 @@ app.post('/create-checkout-session', async (req, res) => {
 });
 
 /* ----------------------------------------------------
-   🟦 PORTAL FACTURACIÓN - SIN CAMBIOS
+   🟦 PORTAL FACTURACIÓN
 ---------------------------------------------------- */
 app.post('/stripe-portal', async (req, res) => {
   try {
@@ -300,20 +274,25 @@ app.post('/stripe-portal', async (req, res) => {
 });
 
 /* ----------------------------------------------------
-   🟦 ESTADO DEL USUARIO - ENDPOINT CORREGIDO
+   🟦 ESTADO DEL USUARIO – Firestore
 ---------------------------------------------------- */
-app.get('/user/:userId/status', (req, res) => {
+app.get('/user/:userId/status', async (req, res) => {
   const { userId } = req.params;
-  
+
   console.log(`\n📋 [STATUS] Consultando estado para userId: ${userId}`);
-  
-  const pagos = leerPagos();
-  const data = pagos[userId] || { 
-    plan: 'freemium', 
-    activo: false, 
-    customerId: null,
-    fecha: new Date().toISOString()
-  };
+
+  const data = await leerPago(userId);
+
+  if (!data) {
+    const fallback = {
+      plan: 'freemium',
+      activo: false,
+      customerId: null,
+      fecha: new Date().toISOString(),
+    };
+    console.log(`📊 [STATUS] Respuesta para ${userId}:`, fallback);
+    return res.json(fallback);
+  }
 
   console.log(`📊 [STATUS] Respuesta para ${userId}:`, data);
   res.json(data);
@@ -326,6 +305,8 @@ const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor Stripe (${STRIPE_MODE}) en puerto ${PORT}`);
 });
+
+
 
 
 
