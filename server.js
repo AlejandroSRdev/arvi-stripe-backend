@@ -8,7 +8,9 @@ import bodyParser from 'body-parser';
    🟦 FIREBASE ADMIN
 ---------------------------------------------------- */
 import admin from 'firebase-admin';
-import serviceAccount from './firebase-service-account.json' assert { type: "json" };
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const serviceAccount = require('./firebase-service-account.json');
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
@@ -305,6 +307,7 @@ const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor Stripe (${STRIPE_MODE}) en puerto ${PORT}`);
 });
+
 
 
 
