@@ -4,15 +4,52 @@ services:
     env: node
     region: frankfurt
     plan: free
+
     buildCommand: "npm install"
     startCommand: "node server.js"
     autoDeploy: true
+
     envVars:
-      - key: STRIPE_SECRET_KEY
-        sync: false        # la pondrá a mano en Render
-      - key: STRIPE_WEBHOOK_SECRET
+      # Modo Stripe
+      - key: STRIPE_MODE
+        value: "live"          # usted puede cambiarlo a "test" cuando quiera
+
+      # Stripe LIVE
+      - key: STRIPE_SECRET_KEY_LIVE
         sync: false
+      - key: STRIPE_WEBHOOK_SECRET_LIVE
+        sync: false
+      - key: PRICE_MINI_LIVE
+        sync: false
+      - key: PRICE_BASE_LIVE
+        sync: false
+      - key: PRICE_PRO_LIVE
+        sync: false
+
+      # Stripe TEST
+      - key: STRIPE_SECRET_KEY_TEST
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET_TEST
+        sync: false
+      - key: PRICE_MINI_TEST
+        sync: false
+      - key: PRICE_BASE_TEST
+        sync: false
+      - key: PRICE_PRO_TEST
+        sync: false
+
+      # Éxito y cancelación
       - key: SUCCESS_BASE_URL
         value: "https://getarvi.com/success"
       - key: CANCEL_URL
         value: "https://getarvi.com/cancel"
+
+      # Firebase (seguras)
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+
+
