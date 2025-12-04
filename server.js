@@ -153,56 +153,72 @@ app.post(
     }
 
     /* ----------------------------------------------------
-       🟡 customer.subscription.deleted → CANCELADA
+       🟡 customer.subscription.deleted → CANCELADA AL FINAL DEL PERIODO
     ---------------------------------------------------- */
     if (event.type === 'customer.subscription.deleted') {
       const subscription = event.data.object;
       const userId = subscription.metadata?.userId;
       const customerId = subscription.customer;
 
-      console.log(`\n🟡 Suscripción cancelada:`);
+      console.log(`\n🟡 Suscripción eliminada definitivamente:`);
       console.log(`   → Usuario: ${userId}`);
       console.log(`   → Customer: ${customerId}`);
+      console.log(`   → Status: ${subscription.status}`);
+      console.log(`   → Ended at: ${subscription.ended_at}`);
+      console.log(`   → Current period end: ${subscription.current_period_end}`);
 
-      if (userId) {
+      // ✅ SOLO revertir a freemium cuando la suscripción REALMENTE ha terminado
+      if (userId && subscription.status === 'canceled' && subscription.ended_at) {
         await guardarPago(userId, {
           plan: "freemium",
           activo: false,
           customerId: null,
           fecha: new Date().toISOString(),
         });
-        console.log('   💾 Usuario revertido a freemium en Firestore');
+        console.log('   💾 Usuario revertido a freemium - Suscripción terminada');
+      } else {
+        console.log('   ⏰ Suscripción marcada para cancelar - Usuario mantiene acceso');
       }
     }
 
     /* ----------------------------------------------------
-       🔴 invoice.payment_failed → RENOVACIÓN FALLIDA
+       🔄 NUEVO: customer.subscription.updated → MONITOREAR CAMBIOS
     ---------------------------------------------------- */
-    if (event.type === 'invoice.payment_failed') {
-      const invoice = event.data.object;
-      let userId = invoice.metadata?.userId;
+    if (event.type === 'customer.subscription.updated') {
+      const subscription = event.data.object;
+      const userId = subscription.metadata?.userId;
+      const customerId = subscription.customer;
 
-      if (!userId && invoice.subscription) {
-        try {
-          const sub = await stripe.subscriptions.retrieve(invoice.subscription);
-          userId = sub.metadata?.userId;
-        } catch (e) {
-          console.error('   ❌ Error obteniendo metadata de suscripción:', e.message);
+      console.log(`\n🔄 Suscripción actualizada:`);
+      console.log(`   → Usuario: ${userId}`);
+      console.log(`   → Status: ${subscription.status}`);
+      console.log(`   → Cancel at period end: ${subscription.cancel_at_period_end}`);
+      console.log(`   → Current period end: ${subscription.current_period_end}`);
+
+      // ✅ DETECTAR cancelación programada (cancel_at_period_end = true)
+      if (userId && subscription.cancel_at_period_end) {
+        // Suscripción cancelada pero activa hasta fin de periodo
+        const datosPago = await leerPago(userId);
+        if (datosPago) {
+          await guardarPago(userId, {
+            ...datosPago,
+            cancelacion_programada: true,
+            fecha_expiracion: new Date(subscription.current_period_end * 1000).toISOString(),
+            fecha_cancelacion_solicitada: new Date().toISOString(),
+          });
+          console.log('   📅 Cancelación programada registrada - Plan sigue activo');
         }
       }
-
-      console.log(`\n🔴 Renovación fallida:`);
-      console.log(`   → Usuario: ${userId}`);
-      console.log(`   → Factura: ${invoice.id}`);
-
-      if (userId) {
+      
+      // ✅ DETECTAR cuando la suscripción se vuelve inactiva
+      if (userId && subscription.status === 'canceled') {
         await guardarPago(userId, {
           plan: "freemium",
           activo: false,
           customerId: null,
           fecha: new Date().toISOString(),
         });
-        console.log('   💾 Usuario revertido a freemium en Firestore');
+        console.log('   💾 Usuario revertido a freemium - Suscripción cancelada definitivamente');
       }
     }
 
@@ -307,10 +323,3 @@ const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor Stripe (${STRIPE_MODE}) en puerto ${PORT}`);
 });
-
-
-
-
-
-
-
